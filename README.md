@@ -2,6 +2,14 @@
 
 画面を移動するアイコンをクリックして得点を競うゲームです。ブラウザー版とPygame版があります。
 
+## ブラウザーでプレイ
+
+GitHub Pagesで公開後は、次のURLから直接プレイできます。
+
+**[Target Gameを開く](https://tamadoro.github.io/python-study/)**
+
+公開するには、リポジトリを公開状態にしたうえで、GitHubの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。`main` ブランチに変更を反映すると、GitHub Actionsが `index.html` と `icon/` を自動でデプロイします。初回デプロイが完了すると上記URLで遊べます。
+
 ## Pygame版に必要な環境
 
 - Python 3
@@ -15,7 +23,7 @@ python -m pip install pygame
 
 ## 起動方法
 
-### ブラウザー版
+### ブラウザー版（ローカル）
 
 リポジトリのルートディレクトリで簡易Webサーバーを起動し、ブラウザーで `http://localhost:8000/` を開きます。
 
