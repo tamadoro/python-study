@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101820">
+    <title>Target Game</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        background: #101820;
+        color: #f3f7fa;
+      }
+
+      body {
+        box-sizing: border-box;
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        padding: 24px;
+        place-items: center;
+      }
+
+      main {
+        width: min(100%, 800px);
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: clamp(1.4rem, 4vw, 2rem);
+        text-align: center;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 4 / 3;
+        border: 2px solid #dce7ed;
+        border-radius: 12px;
+        background: #87ceeb;
+        cursor: crosshair;
+        touch-action: none;
+      }
+
+      #status {
+        min-height: 1.5em;
+        margin: 12px 0 0;
+        color: #c5d5df;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Target Game</h1>
+      <canvas id="game" width="800" height="600" aria-label="Target Game"></canvas>
+      <p id="status" role="status">難易度を選んでゲームを開始してください。</p>
+    </main>
+
+    <script>
+      "use strict";
+
+      const WIDTH = 800;
+      const HEIGHT = 600;
+      const GAME_DURATION_MS = 30_000;
+      const DIFFICULTIES = [
+        { id: "easy", label: "easy", obstacles: 3 },
+        { id: "normal", label: "Normal", obstacles: 4 },
+        { id: "hard", label: "hard", obstacles: 5 },
+        { id: "veryhard", label: "鬼hard", obstacles: 10 },
+      ];
+      const TARGET_SPECS = [
+        { file: "icons8-ahiru.png", points: 5, speed: 1 },
+        { file: "icons8-キツツキ-48.png", points: 10, speed: 2 },
+        { file: "icons8-flamingo-48.png", points: 30, speed: 3 },
+        { file: "icons8-ハチドリ-48.png", points: 50, speed: 5 },
+        { file: "icons8-cute-hamster-48.png", points: 60, speed: 7 },
+        { file: "icons8-owl-48.png", points: 70, speed: 9 },
+        { file: "icons8-phoenix-48.png", points: 100, speed: 12 },
+      ];
+      const OBSTACLE_FILES = [
+        "icons8-雲-100.png",
+        "icons8-建物-100.png",
+        "icons8-森-100.png",
+        "icons8-湖-96.png",
+        "icons8-鉄道車-96.png",
+      ];
+      const canvas = document.querySelector("#game");
+      const context = canvas.getContext("2d");
+      const status = document.querySelector("#status");
+
+      const game = {
+        state: "start",
+        finishReason: "time",
+        selectedDifficulty: DIFFICULTIES[0],
+        score: 0,
+        clickCounts: Array(TARGET_SPECS.length).fill(0),
+        targets: [],
+        obstacles: [],
+        startedAt: 0,
+        previousFrameAt: 0,
+        pointer: { x: WIDTH / 2, y: HEIGHT / 2 },
+      };
+      let assetLoadError = null;
+
+      function loadImage(path) {
+        return new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = () => reject(new Error(`画像を読み込めません: ${path}`));
+          image.src = path;
+        });
+      }
+
+      const assetsReady = Promise.all([
+        ...TARGET_SPECS.map((spec) => loadImage(`icon/${spec.file}`)),
+        ...OBSTACLE_FILES.map((file) => loadImage(`icon/Obstacle/${file}`)),
+        loadImage("icon/icons8-scope.png"),
+      ]).then((images) => {
+        TARGET_SPECS.forEach((spec, index) => {
+          spec.image = images[index];
+        });
+        game.obstacleImages = images.slice(
+          TARGET_SPECS.length,
+          TARGET_SPECS.length + OBSTACLE_FILES.length,
+        );
+        game.scopeImage = images[images.length - 1];
+        status.textContent = "難易度を選んでゲームを開始してください。";
+      }).catch((error) => {
+        assetLoadError = error;
+        status.textContent = `${error.message} icon フォルダーを確認してください。`;
+        console.error(error);
+      });
+
+      function randomInt(max) {
+        return Math.floor(Math.random() * max);
+      }
+
+      function shuffled(items) {
+        const result = [...items];
+        for (let index = result.length - 1; index > 0; index -= 1) {
+          const swapIndex = randomInt(index + 1);
+          [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+        }
+        return result;
+      }
+
+      function createTarget() {
+        const typeIndex = randomInt(TARGET_SPECS.length);
+        const spec = TARGET_SPECS[typeIndex];
+        const direction = ["left", "right", "top", "bottom"][randomInt(4)];
+        const target = {
+          image: spec.image,
+          points: spec.points,
+          speed: spec.speed,
+          typeIndex,
+          x: 0,
+          y: 0,
+          dx: 0,
+          dy: 0,
+        };
+
+        if (direction === "left") {
+          target.x = -spec.image.width;
+          target.y = 100 + randomInt(HEIGHT - 100 - spec.image.height + 1);
+          target.dx = spec.speed;
+        } else if (direction === "right") {
+          target.x = WIDTH;
+          target.y = 100 + randomInt(HEIGHT - 100 - spec.image.height + 1);
+          target.dx = -spec.speed;
+        } else if (direction === "top") {
+          target.x = randomInt(WIDTH - spec.image.width + 1);
+          target.y = -spec.image.height;
+          target.dy = spec.speed;
+        } else {
+          target.x = randomInt(WIDTH - spec.image.width + 1);
+          target.y = HEIGHT;
+          target.dy = -spec.speed;
+        }
+        return target;
+      }
+
+      function createWave() {
+        return Array.from({ length: 2 + randomInt(4) }, createTarget);
+      }
+
+      function createObstacles(count) {
+        const positions = [];
+        for (let y = 100; y < HEIGHT; y += 100) {
+          for (let x = 0; x < WIDTH; x += 100) {
+            positions.push({ x, y });
+          }
+        }
+        return shuffled(positions).slice(0, count).map((position) => {
+          const image = game.obstacleImages[randomInt(game.obstacleImages.length)];
+          return { image, x: position.x, y: position.y };
+        });
+      }
+
+      function targetRect(target) {
+        return {
+          left: target.x,
+          top: target.y,
+          right: target.x + target.image.width,
+          bottom: target.y + target.image.height,
+        };
+      }
+
+      function rectanglesOverlap(first, second) {
+        return first.left < second.right
+          && first.right > second.left
+          && first.top < second.bottom
+          && first.bottom > second.top;
+      }
+
+      function isObstructed(target) {
+        const rect = targetRect(target);
+        return game.obstacles.some((obstacle) => rectanglesOverlap(rect, {
+          left: obstacle.x,
+          top: obstacle.y,
+          right: obstacle.x + obstacle.image.width,
+          bottom: obstacle.y + obstacle.image.height,
+        }));
+      }
+
+      function startGame(difficulty) {
+        game.selectedDifficulty = difficulty;
+        game.obstacles = createObstacles(difficulty.obstacles);
+        game.targets = createWave();
+        game.score = 0;
+        game.clickCounts = Array(TARGET_SPECS.length).fill(0);
+        game.startedAt = performance.now();
+        game.previousFrameAt = game.startedAt;
+        game.finishReason = "time";
+        game.state = "playing";
+        status.textContent = `${difficulty.label}でプレイ中。Escキーで終了できます。`;
+      }
+
+      function finishGame(reason) {
+        game.finishReason = reason;
+        game.state = "finished";
+        status.textContent = reason === "escape"
+          ? "ゲームを中断しました。難易度を選ぶと再スタートします。"
+          : "制限時間終了。難易度を選ぶと再スタートします。";
+      }
+
+      function canvasPoint(event) {
+        const bounds = canvas.getBoundingClientRect();
+        return {
+          x: (event.clientX - bounds.left) * WIDTH / bounds.width,
+          y: (event.clientY - bounds.top) * HEIGHT / bounds.height,
+        };
+      }
+
+      function drawButton(rect, label, highlighted = false) {
+        context.fillStyle = highlighted ? "#3c9650" : "#50aa68";
+        context.beginPath();
+        context.roundRect(rect.x, rect.y, rect.width, rect.height, 10);
+        context.fill();
+        context.fillStyle = "#ffffff";
+        context.font = "bold 24px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
+      }
+
+      function drawStartScreen() {
+        context.fillStyle = "#101820";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.font = "bold 56px system-ui, sans-serif";
+        context.fillText("Target Game", WIDTH / 2, 170);
+        context.font = "26px system-ui, sans-serif";
+        context.fillText("難易度を選んでください", WIDTH / 2, 255);
+        DIFFICULTIES.forEach((difficulty, index) => {
+          const rect = difficultyButtonRect(index);
+          drawButton(
+            rect,
+            `${difficulty.label}（障害物 ${difficulty.obstacles} 個）`,
+            pointInRect(game.pointer, rect),
+          );
+        });
+        context.font = "22px system-ui, sans-serif";
+        context.fillText("制限時間：30秒　|　プレイ中はEscで終了", WIDTH / 2, 555);
+      }
+
+      function drawHud(remainingSeconds) {
+        context.fillStyle = "#101820";
+        context.textAlign = "left";
+        context.textBaseline = "top";
+        context.font = "bold 24px system-ui, sans-serif";
+        context.fillText(`Score: ${game.score}`, 12, 10);
+        context.textAlign = "center";
+        context.fillText(game.selectedDifficulty.label, WIDTH / 2, 10);
+        context.textAlign = "right";
+        context.fillText(`Time: ${remainingSeconds}`, WIDTH - 12, 10);
+
+        TARGET_SPECS.forEach((spec, index) => {
+          const x = 10 + index * 112;
+          context.drawImage(spec.image, x, 42, 32, 32);
+          context.textAlign = "left";
+          context.textBaseline = "middle";
+          context.font = "18px system-ui, sans-serif";
+          context.fillText(`× ${game.clickCounts[index]}`, x + 38, 58);
+        });
+      }
+
+      function drawPlayingScreen(now) {
+        const elapsed = now - game.startedAt;
+        const remaining = Math.max(0, Math.ceil((GAME_DURATION_MS - elapsed) / 1000));
+        const frameScale = Math.min(2, Math.max(0, (now - game.previousFrameAt) / (1000 / 60)));
+        game.previousFrameAt = now;
+
+        if (elapsed >= GAME_DURATION_MS) {
+          finishGame("time");
+          return;
+        }
+
+        game.targets.forEach((target) => {
+          target.x += target.dx * frameScale;
+          target.y += target.dy * frameScale;
+        });
+        game.targets = game.targets.filter((target) => {
+          const rect = targetRect(target);
+          return rect.right > 0 && rect.left < WIDTH && rect.bottom > 0 && rect.top < HEIGHT;
+        });
+        if (game.targets.length === 0) {
+          game.targets = createWave();
+        }
+
+        game.targets.forEach((target) => {
+          if (!isObstructed(target)) {
+            context.drawImage(target.image, target.x, target.y);
+          }
+        });
+        game.obstacles.forEach((obstacle) => {
+          context.drawImage(obstacle.image, obstacle.x, obstacle.y);
+        });
+        drawHud(remaining);
+        context.drawImage(game.scopeImage, game.pointer.x - 50, game.pointer.y - 50);
+      }
+
+      function drawFinishedScreen() {
+        context.fillStyle = "#101820";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.font = "bold 54px system-ui, sans-serif";
+        context.fillText(
+          game.finishReason === "escape" ? "Game Ended" : "Time's Up!",
+          WIDTH / 2,
+          145,
+        );
+        context.font = "28px system-ui, sans-serif";
+        context.fillText(`Final Score: ${game.score}`, WIDTH / 2, 205);
+
+        TARGET_SPECS.forEach((spec, index) => {
+          const x = 80 + (index % 4) * 170;
+          const y = 285 + Math.floor(index / 4) * 78;
+          context.drawImage(spec.image, x, y, 32, 32);
+          context.textAlign = "left";
+          context.textBaseline = "middle";
+          context.font = "20px system-ui, sans-serif";
+          context.fillText(`× ${game.clickCounts[index]}`, x + 42, y + 16);
+        });
+
+        context.textAlign = "center";
+        context.font = "18px system-ui, sans-serif";
+        context.fillText("難易度を選んで再スタート", WIDTH / 2, 465);
+        DIFFICULTIES.forEach((difficulty, index) => {
+          const rect = restartButtonRect(index);
+          drawButton(
+            rect,
+            `${difficulty.label}（${difficulty.obstacles}）`,
+            pointInRect(game.pointer, rect),
+          );
+        });
+      }
+
+      function difficultyButtonRect(index) {
+        return {
+          x: index % 2 === 0 ? 70 : 410,
+          y: index < 2 ? 315 : 405,
+          width: 320,
+          height: 68,
+        };
+      }
+
+      function restartButtonRect(index) {
+        return {
+          x: 10 + index * 198,
+          y: 505,
+          width: 188,
+          height: 60,
+        };
+      }
+
+      function pointInRect(point, rect) {
+        return point.x >= rect.x
+          && point.x <= rect.x + rect.width
+          && point.y >= rect.y
+          && point.y <= rect.y + rect.height;
+      }
+
+      function handleClick(point) {
+        if (game.state === "start") {
+          const index = DIFFICULTIES.findIndex((_, itemIndex) =>
+            pointInRect(point, difficultyButtonRect(itemIndex)));
+          if (index !== -1) {
+            startGame(DIFFICULTIES[index]);
+          }
+          return;
+        }
+
+        if (game.state === "finished") {
+          const index = DIFFICULTIES.findIndex((_, itemIndex) =>
+            pointInRect(point, restartButtonRect(itemIndex)));
+          if (index !== -1) {
+            startGame(DIFFICULTIES[index]);
+          }
+          return;
+        }
+
+        if (game.state !== "playing") {
+          return;
+        }
+        if (performance.now() - game.startedAt >= GAME_DURATION_MS) {
+          finishGame("time");
+          return;
+        }
+
+        const clickRect = {
+          left: point.x - 50,
+          top: point.y - 50,
+          right: point.x + 50,
+          bottom: point.y + 50,
+        };
+        const targetIndex = game.targets.findIndex((target) =>
+          !isObstructed(target) && rectanglesOverlap(targetRect(target), clickRect));
+        if (targetIndex !== -1) {
+          const [target] = game.targets.splice(targetIndex, 1);
+          game.score += target.points;
+          game.clickCounts[target.typeIndex] += 1;
+        }
+      }
+
+      canvas.addEventListener("pointermove", (event) => {
+        game.pointer = canvasPoint(event);
+      });
+      canvas.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        game.pointer = canvasPoint(event);
+        handleClick(game.pointer);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && game.state === "playing") {
+          finishGame("escape");
+        }
+      });
+
+      function frame(now) {
+        context.fillStyle = "#87ceeb";
+        context.fillRect(0, 0, WIDTH, HEIGHT);
+
+        if (assetLoadError) {
+          context.fillStyle = "#101820";
+          context.font = "22px system-ui, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText("画像を読み込めませんでした", WIDTH / 2, HEIGHT / 2);
+        } else if (!game.obstacleImages || !game.scopeImage || !TARGET_SPECS[0].image) {
+          context.fillStyle = "#101820";
+          context.font = "24px system-ui, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText("画像を読み込んでいます…", WIDTH / 2, HEIGHT / 2);
+        } else if (game.state === "start") {
+          drawStartScreen();
+        } else if (game.state === "playing") {
+          drawPlayingScreen(now);
+        } else {
+          drawFinishedScreen();
+        }
+
+        requestAnimationFrame(frame);
+      }
+
+      assetsReady.then(() => requestAnimationFrame(frame));
+    </script>
+  </body>
+</html>
