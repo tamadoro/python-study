@@ -1,8 +1,8 @@
 # Target Game
 
-Pygameで作成した、画面を移動するアイコンをクリックして得点を競うゲームです。
+画面を移動するアイコンをクリックして得点を競うゲームです。ブラウザー版とPygame版があります。
 
-## 必要な環境
+## Pygame版に必要な環境
 
 - Python 3
 - Pygame
@@ -14,6 +14,19 @@ python -m pip install pygame
 ```
 
 ## 起動方法
+
+### ブラウザー版
+
+リポジトリのルートディレクトリで簡易Webサーバーを起動し、ブラウザーで `http://localhost:8000/` を開きます。
+
+```bash
+python -m http.server 8000
+```
+
+`index.html` と `icon/` フォルダーを同じ配置のまま公開すれば、静的Webサイトとしても遊べます。
+ブラウザー版はJavaScriptで動作するためPygameは不要です。静的Webサイトとして公開する場合、Pythonも必要ありません。
+
+### Pygame版
 
 リポジトリのルートディレクトリで、次のコマンドを実行します。
 
